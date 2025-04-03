@@ -6,6 +6,8 @@ if sys.version_info < (3, 6):
     sys.exit("Python 3.6 or later is required.\n")
 min_version("7.0")
 
+scripts = Path(workflow.basedir) / 'bin'
+
 
 WORKDIR = os.path.relpath(
     config.get("workdir", "workspace"), os.path.dirname(workflow.configfiles[-1])
@@ -118,17 +120,16 @@ rule join_pairend_reads:
         html="report_reads/joining/{sample}_{rn}.fastp.html",
         json="report_reads/joining/{sample}_{rn}.fastp.json",
     params:
+        path_joinFastq=scripts / 'joinFastq',
         m=os.path.join(TEMPDIR, "merged_reads/{sample}_{rn}_merge.fq.gz"),
         u1=os.path.join(TEMPDIR, "merged_reads/{sample}_{rn}_u1.fq.gz"),
         u2=os.path.join(TEMPDIR, "merged_reads/{sample}_{rn}_u2.fq.gz"),
-        path_fastp=config["path"]["fastp"],
-        path_joinFastq=config["path"]["joinFastq"],
     threads: 10
     run:
         if len(input) == 2:
             shell(
                 """
-        {params.path_fastp} --thread {threads} \
+        fastp --thread {threads} \
             --disable_adapter_trimming --merge --correction --overlap_len_require 10 --overlap_diff_percent_limit 20 \
             -i {input[0]} -I {input[1]} --merged_out {params.m} --out1 {params.u1} --out2 {params.u2} -h {output.html} -j {output.json}
         {params.path_joinFastq} {params.m} {params.u1} {params.u2} {output.fq}
@@ -156,7 +157,6 @@ rule run_cutadapt:
         else temp("discarded_reads/{sample}_{rn}_short.fq.gz"),
         report="report_reads/trimming/{sample}_{rn}_cutadapt.report",
     params:
-        path_cutadapt=config["path"]["cutadapt"],
         p7=lambda wildcards: SAMPLE2BARCODE[wildcards.sample]["inline"]
         + config["adapter"]["p7"],
         drop_untrimmed_args=lambda wildcards: (
@@ -173,7 +173,7 @@ rule run_cutadapt:
         else "",
         trim_p5_step=lambda wildcards, threads: " ".join(
             [
-                config["path"]["cutadapt"],
+                'cutadapt',
                 "-j",
                         str(threads),
                         "-g",
@@ -186,7 +186,7 @@ rule run_cutadapt:
                 else "",
         trim_polyA_step=lambda wildcards, threads: " ".join(
             [
-                config["path"]["cutadapt"],
+                "cutadapt",
                 "-j",
                         str(threads),
                         "-a",
@@ -221,18 +221,18 @@ rule run_cutadapt:
     threads: 20
     shell:
         """
-        {params.path_cutadapt} -j {threads} \
+        cutadapt -j {threads} \
             --strip-suffix "/1" --strip-suffix "/2" \
             --strip-suffix ".1" --strip-suffix ".2" \
             -a "{params.p7};o=3;e=0.15" \
             {params.drop_untrimmed_args} \
             {input} | \
         {params.trim_p5_step} \
-        {params.path_cutadapt} -j {threads} \
+        cutadapt -j {threads} \
             {params.extract_umi_args} \
             - | \
         {params.trim_polyA_step} \
-        {params.path_cutadapt} -j {threads} \
+        cutadapt -j {threads} \
             {params.mask_ends_args} \
             -q 20 \
             --nextseq-trim=20  \
@@ -250,13 +250,16 @@ rule reverse_reads:
         os.path.join(TEMPDIR, "trimmed_reads/{sample}_{rn}_cut.fq.gz"),
     output:
         temp(os.path.join(TEMPDIR, "reversed_reads/{sample}_{rn}.fq.gz")),
+    container: "docker://y9ch/bidseq"
     params:
-        path_rcFastq=config["path"]["rcFastq"],
-    run:
-        if SAMPLE2STRAND[wildcards.sample]:
-            shell("cp {input} {output}")
-        else:
-            shell("{params.path_rcFastq} {input} {output}")
+        path_rcFastq="/pipeline/bin/rcFastq",
+    shell:
+        "{params.path_rcFastq} {input} {output}"
+        # TODO: fix this
+        # if SAMPLE2STRAND[wildcards.sample]:
+        #     shell("cp {input} {output}")
+        # else:
+        #     shell("{params.path_rcFastq} {input} {output}")
 
 
 rule build_bowtie2_index:
@@ -267,13 +270,12 @@ rule build_bowtie2_index:
         if config["keep_internal"]
         else temp(os.path.join(INTERNALDIR, "mapping_index/{reftype}.1.bt2")),
     params:
-        path_bowtie2build=config["path"]["bowtie2Build"],
         ref_bowtie2=os.path.join(INTERNALDIR, "mapping_index/{reftype}"),
     threads: 2
     shell:
         """
         export LC_ALL=C
-        {params.path_bowtie2build} --threads {threads} {input.fa} {params.ref_bowtie2}
+        bowtie2-build --threads {threads} {input.fa} {params.ref_bowtie2}
         """
 
 
@@ -291,8 +293,6 @@ rule map_to_contamination_by_bowtie2:
         un=temp(os.path.join(TEMPDIR, "mapping_unsort/{sample}_{rn}_contamination.fq")),
         report="report_reads/mapping/{sample}_{rn}_contamination.report",
     params:
-        path_bowtie2=config["path"]["bowtie2"],
-        path_samtools=config["path"]["samtools"],
         ref_bowtie2=lambda wildcards: REF["contamination"].get(
             "bt2", os.path.join(INTERNALDIR, "mapping_index/contamination")
         ),
@@ -305,10 +305,10 @@ rule map_to_contamination_by_bowtie2:
     shell:
         """
         export LC_ALL=C
-        {params.path_bowtie2} -p {threads} \
+        bowtie2 -p {threads} \
             {params.args_bowtie2} \
             --no-unal --un {output.un} -x {params.ref_bowtie2} -U {input.fq} 2>{output.report} | \
-            {params.path_samtools} view -O BAM -o {output.bam}
+            samtools view -O BAM -o {output.bam}
         """
 
 
@@ -318,12 +318,11 @@ rule extract_contamination_unmap:
     output:
         temp(os.path.join(TEMPDIR, "mapping_rerun/{sample}_{rn}_contamination.fq")),
     params:
-        path_samtools=config["path"]["samtools"],
         ref_fa=lambda wildcards: REF.get("contamination", {"fa": []})["fa"],
     threads: 4
     shell:
         """
-        {params.path_samtools} fastq -@ {threads} --reference {params.ref_fa} {input} > {output}
+        samtools fastq -@ {threads} --reference {params.ref_fa} {input} > {output}
         """
 
 
@@ -339,14 +338,12 @@ rule map_to_genes_by_bowtie2:
             "bt2", os.path.join(INTERNALDIR, "mapping_index/genes")
         )
             + ".1.bt2",
+        path_samfilter=scripts / "samFilter",
     output:
         bam=temp(os.path.join(TEMPDIR, "mapping_unsort/{sample}_{rn}_genes.bam")),
         un=temp(os.path.join(TEMPDIR, "mapping_unsort/{sample}_{rn}_genes.fq")),
         report="report_reads/mapping/{sample}_{rn}_genes.report",
     params:
-        path_bowtie2=config["path"]["bowtie2"],
-        path_samfilter=config["path"]["samfilter"],
-        path_samtools=config["path"]["samtools"],
         ref_bowtie2=lambda wildcards: REF["genes"].get(
             "bt2", os.path.join(INTERNALDIR, "mapping_index/genes")
         ),
@@ -370,11 +367,11 @@ rule map_to_genes_by_bowtie2:
     shell:
         """
         export LC_ALL=C
-        {params.path_bowtie2} -p {threads} \
+        bowtie2 -p {threads} \
             {params.args_bowtie2} --norc -a \
             --no-unal --un {output.un} -x {params.ref_bowtie2} -U {params.fq} 2>{output.report} | \
-            {params.path_samfilter} | \
-            {params.path_samtools} view -O BAM -o {output.bam}
+            {input.path_samfilter} | \
+            samtools view -O BAM -o {output.bam}
         """
 
 
@@ -384,12 +381,11 @@ rule extract_genes_unmap:
     output:
         temp(os.path.join(TEMPDIR, "mapping_rerun/{sample}_{rn}_genes.fq")),
     params:
-        path_samtools=config["path"]["samtools"],
         ref_fa=REF["genes"]["fa"],
     threads: 4
     shell:
         """
-        {params.path_samtools} fastq -@ {threads} --reference {params.ref_fa} {input} > {output}
+        samtools fastq -@ {threads} --reference {params.ref_fa} {input} > {output}
         """
 
 
@@ -413,17 +409,15 @@ rule map_to_genome_by_star:
         output_pre=os.path.join(TEMPDIR, "star_mapping/{sample}_{rn}_"),
         un=os.path.join(TEMPDIR, "star_mapping/{sample}_{rn}_Unmapped.out.mate1"),
         report=os.path.join(TEMPDIR, "star_mapping/{sample}_{rn}_Log.final.out"),
-        path_star=config["path"]["star"],
         ref_star=REF["genome"]["star"],
         match_prop=config["cutoff"]["min_match_prop"],
     threads: 24
     shell:
         """
-        ulimit -n $(ulimit -Hn)
         rm -f {params.un}
         mkfifo {params.un}
         cat {params.un} | gzip > {output.un} &
-        {params.path_star} \
+        STAR \
           --runThreadN {threads} \
           --genomeDir {params.ref_star} \
           --readFilesIn {input.f1},{input.f2} \
@@ -461,6 +455,7 @@ rule map_to_genome_by_star:
 rule gap_realign:
     input:
         os.path.join(TEMPDIR, "mapping_unsort/{sample}_{rn}_{reftype}.bam"),
+        path_realignGap=scripts / "realignGap",
     output:
         temp(
             os.path.join(
@@ -468,11 +463,10 @@ rule gap_realign:
             )
         ),
     params:
-        path_realignGap=config["path"]["realignGap"],
         ref_fa=lambda wildcards: REF[wildcards.reftype]["fa"],
     shell:
         """
-        {params.path_realignGap} -r {params.ref_fa} -i {input} -o {output}
+        {input.path_realignGap} -r {params.ref_fa} -i {input} -o {output}
         """
 
 
@@ -489,14 +483,13 @@ rule sort_cal_filter_bam:
         ),
         un=temp(os.path.join(TEMPDIR, "mapping_discarded/{sample}_{rn}_{reftype}.cram")),
     params:
-        path_samtools=config["path"]["samtools"],
         ref_fa=lambda wildcards: REF[wildcards.reftype]["fa"],
     threads: 8
     shell:
         """
-        {params.path_samtools} sort -@ {threads} -m 4G {input} | \
-            {params.path_samtools} calmd -@ {threads} - {params.ref_fa} 2>/dev/null | \
-            {params.path_samtools} view -@ {threads} --reference {params.ref_fa} -e '[NM]<=5 && [NM]/(qlen-sclen)<=0.1' -O CRAM -U {output.un} -o {output.cram}
+        samtools sort -@ {threads} -m 4G {input} | \
+            samtools calmd -@ {threads} - {params.ref_fa} 2>/dev/null | \
+            samtools view -@ {threads} --reference {params.ref_fa} -e '[NM]<=5 && [NM]/(qlen-sclen)<=0.1' -O CRAM -U {output.un} -o {output.cram}
         """
 
 
@@ -508,12 +501,11 @@ rule combine_mapping_discarded:
         if config["keep_discarded"]
         else temp("discarded_reads/{sample}_{rn}_filteredmap.fq.gz"),
     params:
-        path_samtools=config["path"]["samtools"],
         ref_fa=REF["genome"]["fa"],
     threads: 4
     shell:
         """
-        {params.path_samtools} fastq -@ {threads} --reference {params.ref_fa} -0 {output} {input}
+        samtools fastq -@ {threads} --reference {params.ref_fa} -0 {output} {input}
         """
 
 
@@ -530,17 +522,16 @@ rule combine_runs:
         bam=temp(os.path.join(TEMPDIR, "combined_mapping/{sample}_{reftype}.bam")),
         bai=temp(os.path.join(TEMPDIR, "combined_mapping/{sample}_{reftype}.bam.bai")),
     params:
-        path_samtools=config["path"]["samtools"],
         ref_fa=lambda wildcards: REF[wildcards.reftype]["fa"],
     threads: 8
     run:
         if len(input) > 1:
             shell(
-                "{params.path_samtools} merge -@ {threads} --reference {params.ref_fa} --write-index -O BAM -o {output.bam}##idx##{output.bai} {input}"
+                "samtools merge -@ {threads} --reference {params.ref_fa} --write-index -O BAM -o {output.bam}##idx##{output.bai} {input}"
             )
         else:
             shell(
-                "{params.path_samtools} view -@ {threads} --reference {params.ref_fa} --write-index -O BAM -o {output.bam}##idx##{output.bai} {input}"
+                "samtools view -@ {threads} --reference {params.ref_fa} --write-index -O BAM -o {output.bam}##idx##{output.bai} {input}"
             )
 
 
@@ -548,11 +539,11 @@ rule drop_duplicates:
     input:
         bam=os.path.join(TEMPDIR, "combined_mapping/{sample}_{reftype}.bam"),
         bai=os.path.join(TEMPDIR, "combined_mapping/{sample}_{reftype}.bam.bai"),
+        path_umicollapse=scripts / "umicollapse.jar",
     output:
         bam="align_bam/{sample}_{reftype}.bam",
         log="report_reads/deduping/{sample}_{reftype}.log",
     params:
-        path_umicollapse=config["path"]["umicollapse"],
         TEMPDIR=TEMPDIR,
     threads: 8
     run:
@@ -563,7 +554,7 @@ rule drop_duplicates:
         ):
             shell(
                 """
-                java -server -Xmx46G -Xms24G -Xss100M -Djava.io.tmpdir={params.TEMPDIR} -jar {params.path_umicollapse} bam \
+                java -server -Xmx46G -Xms24G -Xss100M -Djava.io.tmpdir={params.TEMPDIR} -jar {input.path_umicollapse} bam \
                     -t {threads} --data naive --merge avgqual --two-pass -i {input.bam} -o {output.bam} >{output.log}
                 """
             )
@@ -581,11 +572,9 @@ rule index_dedup_bam:
         "align_bam/{sample}_{reftype}.bam",
     output:
         "align_bam/{sample}_{reftype}.bam.bai",
-    params:
-        path_samtools=config["path"]["samtools"],
     threads: 4
     shell:
-        "{params.path_samtools} index -@ {threads} {input}"
+        "samtools index -@ {threads} {input}"
 
 
 rule stat_dedup_bam:
@@ -593,11 +582,9 @@ rule stat_dedup_bam:
         "align_bam/{sample}_{reftype}.bam",
     output:
         "report_reads/deduping/{sample}_{reftype}_dedup.report",
-    params:
-        path_samtools=config["path"]["samtools"],
     threads: 4
     shell:
-        "{params.path_samtools} flagstat -@ {threads} -O tsv {input} > {output}"
+        "samtools flagstat -@ {threads} -O tsv {input} > {output}"
 
 
 rule report_reads_stat:
@@ -626,10 +613,8 @@ rule report_reads_stat:
         ],
     output:
         "report_reads/readsStats.html",
-    params:
-        path_multiqc=config["path"]["multiqc"],
     shell:
-        "{params.path_multiqc} -f -m readsStats -t yc --no-data-dir -n {output} {input}"
+        "multiqc -f -m readsStats -t yc --no-data-dir -n {output} {input}"
 
 
 ##### call pU sites #####
@@ -654,28 +639,26 @@ rule merge_treated_bam_by_group:
         bai=temp(
             os.path.join(TEMPDIR, "drop_duplicates_grouped/{group}_{reftype}.bam.bai")
         ),
-    params:
-        path_samtools=config["path"]["samtools"],
     threads: 8
     shell:
-        "{params.path_samtools} merge -@ {threads} --write-index -O BAM -o {output.bam}##idx##{output.bai} {input.bam}"
+        "samtools merge -@ {threads} --write-index -O BAM -o {output.bam}##idx##{output.bai} {input.bam}"
 
 
 rule perbase_count_pre:
     input:
         bam=os.path.join(TEMPDIR, "drop_duplicates_grouped/{group}_{reftype}.bam"),
         bai=os.path.join(TEMPDIR, "drop_duplicates_grouped/{group}_{reftype}.bam.bai"),
+        path_delfilter=scripts / "deletionFilter",
     output:
         temp(os.path.join(TEMPDIR, "selected_region_by_group/{group}_{reftype}.bed")),
     params:
-        path_delfilter=config["path"]["delfilter"],
         min_group_gap=config["cutoff"]["min_group_gap"],
         min_group_depth=config["cutoff"]["min_group_depth"],
         min_group_ratio=config["cutoff"]["min_group_ratio"],
     threads: 1
     shell:
         """
-        {params.path_delfilter} -i {input.bam} -g {params.min_group_gap} -d {params.min_group_depth} -r {params.min_group_ratio} > {output}
+        {input.path_delfilter} -i {input.bam} -g {params.min_group_gap} -d {params.min_group_depth} -r {params.min_group_ratio} > {output}
         """
 
 
@@ -686,11 +669,9 @@ rule generate_faidx:
         fai=os.path.join(INTERNALDIR, "fa_index/{reftype}.fa.fai")
         if config["keep_internal"]
         else temp(os.path.join(INTERNALDIR, "fa_index/{reftype}.fa.fai")),
-    params:
-        path_samtools=config["path"]["samtools"],
     shell:
         """
-        {params.path_samtools} faidx {input.fa} --fai-idx {output.fai}
+        samtools faidx {input.fa} --fai-idx {output.fai}
         """
 
 
@@ -706,14 +687,13 @@ rule prepare_bed_file:
         fwd=temp(os.path.join(TEMPDIR, "selected_region/picked_{reftype}_fwd.bed")),
         rev=temp(os.path.join(TEMPDIR, "selected_region/picked_{reftype}_rev.bed")),
     params:
-        path_bedtools=config["path"]["bedtools"],
         min_group_num=config["cutoff"]["min_group_num"],
     threads: 4
     shell:
         """
-        cat {input.bed} | {params.path_bedtools} slop -i - -g {input.fai} -b 3 | sort -S 4G --parallel={threads} -k1,1 -k2,2n >{output.tmp}
-        {params.path_bedtools} merge -s -S + -c 1 -o count -i {output.tmp} | awk '$4 >= {params.min_group_num}' > {output.fwd}
-        {params.path_bedtools} merge -s -S - -c 1 -o count -i {output.tmp} | awk '$4 >= {params.min_group_num}' > {output.rev}
+        cat {input.bed} | bedtools slop -i - -g {input.fai} -b 3 | sort -S 4G --parallel={threads} -k1,1 -k2,2n >{output.tmp}
+        bedtools merge -s -S + -c 1 -o count -i {output.tmp} | awk '$4 >= {params.min_group_num}' > {output.fwd}
+        bedtools merge -s -S - -c 1 -o count -i {output.tmp} | awk '$4 >= {params.min_group_num}' > {output.rev}
         """
 
 
@@ -731,6 +711,7 @@ rule count_base_by_sample:
         bai=lambda wildcards: "align_bam/{sample}_{reftype}.bam.bai"
         if wildcards.sample in SAMPLE2RUN
         else SAMPLE2BAM[wildcards.sample][wildcards.reftype] + ".bai",
+        path_cpup=scripts / "cpup",
     output:
         temp(
             os.path.join(
@@ -738,8 +719,6 @@ rule count_base_by_sample:
             )
         ),
     params:
-        path_samtools=config["path"]["samtools"],
-        path_cpup=config["path"]["cpup"],
         ref=lambda wildcards: REF[wildcards.reftype]["fa"],
         region=lambda wildcards: "-l "
         + os.path.join(
@@ -755,8 +734,8 @@ rule count_base_by_sample:
     threads: 2
     shell:
         """
-        {params.path_samtools} mpileup -aa -B -d 0 {params.flag} -Q 5 --reverse-del {params.region} -f {params.ref} {input.bam} | \
-            {params.path_cpup} -H -S -i | \
+        samtools mpileup -aa -B -d 0 {params.flag} -Q 5 --reverse-del {params.region} -f {params.ref} {input.bam} | \
+            {input.path_cpup} -H -S -i | \
             sed 's/\\t/\\t{params.strand}\\t/3' > {output}
         """
 
@@ -813,23 +792,22 @@ rule count_bases_combined:
 rule adjust_sites:
     input:
         os.path.join(TEMPDIR, "pileup_bases/{reftype}.tsv"),
+        path_adjustGap=scripts / "adjustGap",
     output:
         "call_sites/{reftype}.tsv.gz",
-    params:
-        path_adjustGap=config["path"]["adjustGap"],
     shell:
         """
-        {params.path_adjustGap} -i {input} -o {output}
+        {input.path_adjustGap} -i {input} -o {output}
         """
 
 
 rule pre_filter_sites:
     input:
         "call_sites/{reftype}.tsv.gz",
+        path_filterGap=scripts / "filterGap",
     output:
         temp(os.path.join(TEMPDIR, "prefilter_sites/{reftype}.tsv.gz")),
     params:
-        path_filterGap=config["path"]["filterGap"],
         min_group_gap=config["cutoff"]["min_group_gap"],
         min_group_depth=config["cutoff"]["min_group_depth"],
         min_group_ratio=config["cutoff"]["min_group_ratio"],
@@ -846,7 +824,7 @@ rule pre_filter_sites:
         ),
     shell:
         """
-        {params.path_filterGap} -i {input} -o {output} {params.columns} -g {params.min_group_gap} -d {params.min_group_depth} -r {params.min_group_ratio} -n {params.min_group_num}
+        {input.path_filterGap} -i {input} -o {output} {params.columns} -g {params.min_group_gap} -d {params.min_group_depth} -r {params.min_group_ratio} -n {params.min_group_num}
         """
 
 
@@ -861,4 +839,4 @@ rule post_filter_sites:
         calibration_curve=CALI,
         ref_fasta=lambda wildcards: REF[wildcards.reftype]["fa"],
     script:
-        config["path"]["pickSites"]
+        scripts / "pickSites.py"
