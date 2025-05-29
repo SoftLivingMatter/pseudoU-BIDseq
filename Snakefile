@@ -17,6 +17,7 @@ INTERNALDIR = "internal_files"
 
 
 workdir: WORKDIR
+os.makedirs(Path(WORKDIR)/'slurm' , exist_ok=True)
 
 
 CALI = config.get("calibration_curves", "")
@@ -108,6 +109,29 @@ rule all:
         expand("call_sites/{reftype}.tsv.gz", reftype=REFTYPE),
         expand("filter_sites/{reftype}.tsv.gz", reftype=REFTYPE),
 
+
+localrules:
+    join_pairend_reads,
+    run_cutadapt,
+    reverse_reads,
+    gap_realign,
+    drop_duplicates,
+    extract_genes_unmap,
+    sort_cal_filter_bam,
+    index_dedup_bam,
+    stat_dedup_bam,
+    report_reads_stat,
+    merge_treated_bam_by_group,
+    perbase_count_pre,
+    generate_faidx,
+    combine_mapping_discarded,
+    combine_runs,
+    prepare_bed_file,
+    count_base_by_sample,
+    count_bases_combined,
+    adjust_sites,
+    pre_filter_sites,
+    post_filter_sites,
 
 #### process reads ####
 
@@ -455,7 +479,6 @@ rule map_to_genome_by_star:
 rule gap_realign:
     input:
         os.path.join(TEMPDIR, "mapping_unsort/{sample}_{rn}_{reftype}.bam"),
-        path_realignGap=scripts / "realignGap",
     output:
         temp(
             os.path.join(
@@ -463,10 +486,12 @@ rule gap_realign:
             )
         ),
     params:
+        path_realignGap="/pipeline/bin/realignGap",
         ref_fa=lambda wildcards: REF[wildcards.reftype]["fa"],
+    container: "docker://y9ch/bidseq"
     shell:
         """
-        {input.path_realignGap} -r {params.ref_fa} -i {input} -o {output}
+        {params.path_realignGap} -r {params.ref_fa} -i {input} -o {output}
         """
 
 
@@ -539,32 +564,39 @@ rule drop_duplicates:
     input:
         bam=os.path.join(TEMPDIR, "combined_mapping/{sample}_{reftype}.bam"),
         bai=os.path.join(TEMPDIR, "combined_mapping/{sample}_{reftype}.bam.bai"),
-        path_umicollapse=scripts / "umicollapse.jar",
     output:
         bam="align_bam/{sample}_{reftype}.bam",
         log="report_reads/deduping/{sample}_{reftype}.log",
     params:
+        path_umicollapse='/bin/umicollapse.jar',
         TEMPDIR=TEMPDIR,
     threads: 8
-    run:
-        if (
-            SAMPLE2BARCODE[wildcards.sample]["umi5"]
-            + SAMPLE2BARCODE[wildcards.sample]["umi3"]
-            > 0
-        ):
-            shell(
-                """
-                java -server -Xmx46G -Xms24G -Xss100M -Djava.io.tmpdir={params.TEMPDIR} -jar {input.path_umicollapse} bam \
-                    -t {threads} --data naive --merge avgqual --two-pass -i {input.bam} -o {output.bam} >{output.log}
-                """
-            )
-        else:
-            shell(
-                """
-                cp {input.bam} {output.bam}
-                touch {output.log}
-                """
-            )
+    container: "docker://y9ch/bidseq"
+    shell:
+        """
+        cp {input.bam} {output.bam}
+        touch {output.log}
+        """
+    # TODO fix this
+    # run:
+    #     if (
+    #         SAMPLE2BARCODE[wildcards.sample]["umi5"]
+    #         + SAMPLE2BARCODE[wildcards.sample]["umi3"]
+    #         > 0
+    #     ):
+    #         shell(
+    #             """
+    #             java -server -Xmx46G -Xms24G -Xss100M -Djava.io.tmpdir={params.TEMPDIR} -jar {params.path_umicollapse} bam \
+    #                 -t {threads} --data naive --merge avgqual --two-pass -i {input.bam} -o {output.bam} >{output.log}
+    #             """
+    #         )
+    #     else:
+    #         shell(
+    #             """
+    #             cp {input.bam} {output.bam}
+    #             touch {output.log}
+    #             """
+    #         )
 
 
 rule index_dedup_bam:
@@ -613,9 +645,11 @@ rule report_reads_stat:
         ],
     output:
         "report_reads/readsStats.html",
+    params:
+        path_multiqc="/pipeline/micromamba/bin/multiqc",
+    container: "docker://y9ch/bidseq"
     shell:
-        "multiqc -f -m readsStats -t yc --no-data-dir -n {output} {input}"
-
+        "{params.path_multiqc} -f -m readsStats -t yc --no-data-dir -n {output} {input}"
 
 ##### call pU sites #####
 
@@ -792,22 +826,24 @@ rule count_bases_combined:
 rule adjust_sites:
     input:
         os.path.join(TEMPDIR, "pileup_bases/{reftype}.tsv"),
-        path_adjustGap=scripts / "adjustGap",
     output:
         "call_sites/{reftype}.tsv.gz",
+    params:
+        path_adjustGap="/pipeline/bin/adjustGap",
+    container: "docker://y9ch/bidseq"
     shell:
         """
-        {input.path_adjustGap} -i {input} -o {output}
+        {params.path_adjustGap} -i {input} -o {output}
         """
 
 
 rule pre_filter_sites:
     input:
         "call_sites/{reftype}.tsv.gz",
-        path_filterGap=scripts / "filterGap",
     output:
         temp(os.path.join(TEMPDIR, "prefilter_sites/{reftype}.tsv.gz")),
     params:
+        path_filterGap='/pipeline/bin/filterGap',
         min_group_gap=config["cutoff"]["min_group_gap"],
         min_group_depth=config["cutoff"]["min_group_depth"],
         min_group_ratio=config["cutoff"]["min_group_ratio"],
@@ -822,9 +858,10 @@ rule pre_filter_sites:
                 if "treated" in v
             ]
         ),
+    container: "docker://y9ch/bidseq"
     shell:
         """
-        {input.path_filterGap} -i {input} -o {output} {params.columns} -g {params.min_group_gap} -d {params.min_group_depth} -r {params.min_group_ratio} -n {params.min_group_num}
+        {params.path_filterGap} -i {input} -o {output} {params.columns} -g {params.min_group_gap} -d {params.min_group_depth} -r {params.min_group_ratio} -n {params.min_group_num}
         """
 
 

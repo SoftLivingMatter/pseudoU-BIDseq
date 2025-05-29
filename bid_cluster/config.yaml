@@ -1,0 +1,66 @@
+---
+# basic configuration
+# dry-run: true
+# quiet: rules
+printshellcmds: true
+use-singularity: true
+singularity-prefix: ~/snakemake_images/
+
+# cluster specific settings
+cluster: "sbatch \
+            --cpus-per-task={threads} \
+            --mem={resources.mem_mb}M \
+            --time={resources.runtime} \
+            --output=slurm/%x-%A \
+            --job-name={rule} \
+            --parsable"
+cluster-status: "/home/tcomi/projects/sprite2.0-pipeline/cluster/slurm-status.py"
+cluster-cancel: scancel
+cluster-cancel-nargs: 50
+latency-wait: 120  # wait 2 minutes for missing files before raising exception
+                   # important for NFS
+jobs: 250  # maximum jobs to run at once
+max-jobs-per-second: 1
+max-status-checks-per-second: 10
+local-cores: 10  # maximum local jobs to run
+
+set-threads:
+  - join_pairend_reads=1
+  - run_cutadapt=1
+  - reverse_reads=1
+  - build_bowtie2_index=1
+  - map_to_contamination_by_bowtie2=1
+  - extract_contamination_unmap=1
+  - map_to_genes_by_bowtie2=2
+  - extract_genes_unmap=1
+  - map_to_genome_by_star=1
+  - gap_realign=1
+  - sort_cal_filter_bam=1
+  - combine_mapping_discarded=1
+  - combine_runs=1
+  - drop_duplicates=1
+  - index_dedup_bam=1
+  - stat_dedup_bam=1
+  - report_reads_stat=1
+  - merge_treated_bam_by_group=1
+  - perbase_count_pre=1
+  - generate_faidx=1
+  - prepare_bed_file=1
+  - count_base_by_sample=1
+  - count_bases_combined=1
+  - adjust_sites=1
+  - pre_filter_sites=1
+  - post_filter_sites=1
+
+set-resources:
+  - build_bowtie2_index:mem_mb=8000
+  - build_bowtie2_index:runtime=63
+  - map_to_genes_by_bowtie2:mem_mb=8000
+  - map_to_genes_by_bowtie2:runtime=240
+  - map_to_genome_by_star:mem_mb=4000
+  - map_to_genome_by_star:runtime=120
+
+  - map_to_contamination_by_bowtie2:mem_mb=4000
+  - map_to_contamination_by_bowtie2:runtime=120
+  - extract_contamination_unmap:mem_mb=4000
+  - extract_contamination_unmap:runtime=120
