@@ -1,13 +1,12 @@
 import sys
 from snakemake.utils import min_version
 from collections import defaultdict
+import pandas as pd
 
 if sys.version_info < (3, 6):
     sys.exit("Python 3.6 or later is required.\n")
+# snakemake==7.18
 min_version("7.0")
-
-scripts = Path(workflow.basedir) / 'bin'
-
 
 WORKDIR = os.path.relpath(
     config.get("workdir", "workspace"), os.path.dirname(workflow.configfiles[-1])
@@ -15,12 +14,13 @@ WORKDIR = os.path.relpath(
 TEMPDIR = os.path.relpath(config.get("tempdir", os.path.join(WORKDIR, ".tmp")), WORKDIR)
 INTERNALDIR = "internal_files"
 
+container: "docker://y9ch/bidseq"
 
 workdir: WORKDIR
 os.makedirs(Path(WORKDIR)/'slurm' , exist_ok=True)
 
 
-CALI = config.get("calibration_curves", "")
+CALI = config.get("calibration_curves", "/pipeline/calibration_curves.tsv")
 CALI = (
     CALI
     if os.path.isabs(CALI)
@@ -65,6 +65,66 @@ def parse_barcode(b):
     }
 
 
+def generate_samples(sample_specification):
+    samples = glob_wildcards(sample_specification['base_path']).sample
+    data = pd.DataFrame(
+            dict(
+                filename=[
+                    sample_specification['base_path'].format(sample=sample)
+                    for sample in samples
+                    ],
+                sample=samples,
+                ),
+            )
+    treated_regex = sample_specification['treated_regex']
+    regex = sample_specification['sample_regex'].format(
+        group=r'(?P<group>.*)',
+        treated=f'(?P<treated>{treated_regex})',
+        read=r'(?P<read>\d+)',
+    )
+
+    print(f'Found {len(data)} files')
+    data = pd.concat(
+        (data, data['sample'].str.extract(regex)),
+        axis='columns').dropna()
+    print(f'Extracted {len(data)} files')
+
+    data['treated'] = data['treated'] == sample_specification['treated_name']
+
+    # little verification, expect 4 files per group
+    counts = data.groupby(['group'])['sample'].count()
+    if not counts[counts != 4].empty:
+        print('Some groups did not have correct number of reads and treatments')
+        print(counts[counts != 4])
+        raise ValueError()
+
+    # check reads to see if there are only 2 options, set first (sorted) as read 1
+    reads = sorted(data['read'].unique())
+    if len(reads) != 2:
+        print(f'Expected two unique reads, found {reads}')
+        raise ValueError()
+
+    read1 = reads[0]
+
+    result = {}
+    for _, row in data.iterrows():
+        sample = row['group'] + ('_treated' if row['treated'] else '_untreated')
+        if sample not in result:
+            result[sample] = {
+                'data': [{}],
+                'group': row['group'],
+                'treated': row['treated'],
+            }
+        read = 'R1' if row['read'] == read1 else 'R2'
+        result[sample]['data'][0][read] = row['filename']
+
+    return result
+
+
+if 'sample_specification' in config:
+    config["samples"] = generate_samples(config['sample_specification'])
+
+
 REFTYPE = ["genes", "genome"]
 GROUP2SAMPLE = defaultdict(lambda: defaultdict(list))
 SAMPLE_IDS = []
@@ -73,6 +133,7 @@ SAMPLE2BARCODE = defaultdict(str)
 # is reverse?
 SAMPLE2STRAND = defaultdict(bool)
 SAMPLE2BAM = defaultdict(dict)
+
 for s, v2 in config["samples"].items():
     SAMPLE_IDS.append(s)
     if v2.get("treated", True):
@@ -144,30 +205,34 @@ rule join_pairend_reads:
         html="report_reads/joining/{sample}_{rn}.fastp.html",
         json="report_reads/joining/{sample}_{rn}.fastp.json",
     params:
-        path_joinFastq=scripts / 'joinFastq',
+        path_joinFastq=config['path']['joinFastq'],
         m=os.path.join(TEMPDIR, "merged_reads/{sample}_{rn}_merge.fq.gz"),
         u1=os.path.join(TEMPDIR, "merged_reads/{sample}_{rn}_u1.fq.gz"),
         u2=os.path.join(TEMPDIR, "merged_reads/{sample}_{rn}_u2.fq.gz"),
-    threads: 10
-    run:
-        if len(input) == 2:
-            shell(
-                """
-        fastp --thread {threads} \
-            --disable_adapter_trimming --merge --correction --overlap_len_require 10 --overlap_diff_percent_limit 20 \
-            -i {input[0]} -I {input[1]} --merged_out {params.m} --out1 {params.u1} --out2 {params.u2} -h {output.html} -j {output.json}
-        {params.path_joinFastq} {params.m} {params.u1} {params.u2} {output.fq}
-        rm -f {params.m} {params.u1} {params.u2}
-        """
-            )
-        else:
-            shell(
-                """
-        ln -sfr {input[0]} {output.fq}
-        touch {output.html} {output.json}
-        """
-            )
-
+    threads: 1
+    shell:
+        'input_array=({input})\n'
+        'if [ ${{#input_array[@]}} -eq 2 ]; then\n'
+            'fastp '
+                '--thread {threads} '
+                '--disable_adapter_trimming '
+                '--merge '
+                '--correction '
+                '--overlap_len_require 10 '
+                '--overlap_diff_percent_limit 20 '
+                '-i {input[0]} '
+                '-I {input[1]} '
+                '--merged_out {params.m} '
+                '--out1 {params.u1} '
+                '--out2 {params.u2} '
+                '-h {output.html} '
+                '-j {output.json} \n'
+            '{params.path_joinFastq} {params.m} {params.u1} {params.u2} {output.fq} \n'
+            'rm -f {params.m} {params.u1} {params.u2} \n'
+        'else\n'
+            'ln -sfr {input[0]} {output.fq}\n'
+            'touch {output.html} {output.json}\n'
+        'fi'
 
 rule run_cutadapt:
     input:
@@ -242,7 +307,7 @@ rule run_cutadapt:
         else "" + "-u -{}".format(SAMPLE2BARCODE[wildcards.sample]["mask3"])
         if SAMPLE2BARCODE[wildcards.sample]["mask3"] > 0
         else "",
-    threads: 20
+    threads: 1
     shell:
         """
         cutadapt -j {threads} \
@@ -274,17 +339,11 @@ rule reverse_reads:
         os.path.join(TEMPDIR, "trimmed_reads/{sample}_{rn}_cut.fq.gz"),
     output:
         temp(os.path.join(TEMPDIR, "reversed_reads/{sample}_{rn}.fq.gz")),
-    container: "docker://y9ch/bidseq"
     params:
-        path_rcFastq="/pipeline/bin/rcFastq",
+        # run rfFastq if required, otherwise copy file directly
+        cmd=lambda wildcards: "cp" if SAMPLE2STRAND[wildcards.sample] else config['path']["rcFastq"],
     shell:
-        "{params.path_rcFastq} {input} {output}"
-        # TODO: fix this
-        # if SAMPLE2STRAND[wildcards.sample]:
-        #     shell("cp {input} {output}")
-        # else:
-        #     shell("{params.path_rcFastq} {input} {output}")
-
+        "{params.cmd} {input} {output}"
 
 rule build_bowtie2_index:
     input:
@@ -325,7 +384,7 @@ rule map_to_contamination_by_bowtie2:
         else "--local --ma 2 --score-min G,20,8 -D 20 -R 3 -L 16 -N 1 --mp 4 --rdg 0,2"
         if config["greedy_mapping"]
         else "--end-to-end --ma 0 --score-min L,2,-0.5 -D 20 -R 3 -L 16 -N 1 --mp 4 --rdg 0,2",
-    threads: 24
+    threads: 1
     shell:
         """
         export LC_ALL=C
@@ -343,7 +402,7 @@ rule extract_contamination_unmap:
         temp(os.path.join(TEMPDIR, "mapping_rerun/{sample}_{rn}_contamination.fq")),
     params:
         ref_fa=lambda wildcards: REF.get("contamination", {"fa": []})["fa"],
-    threads: 4
+    threads: 1
     shell:
         """
         samtools fastq -@ {threads} --reference {params.ref_fa} {input} > {output}
@@ -362,12 +421,12 @@ rule map_to_genes_by_bowtie2:
             "bt2", os.path.join(INTERNALDIR, "mapping_index/genes")
         )
             + ".1.bt2",
-        path_samfilter=scripts / "samFilter",
     output:
         bam=temp(os.path.join(TEMPDIR, "mapping_unsort/{sample}_{rn}_genes.bam")),
         un=temp(os.path.join(TEMPDIR, "mapping_unsort/{sample}_{rn}_genes.fq")),
         report="report_reads/mapping/{sample}_{rn}_genes.report",
     params:
+        path_samfilter=config['path']["samfilter"],
         ref_bowtie2=lambda wildcards: REF["genes"].get(
             "bt2", os.path.join(INTERNALDIR, "mapping_index/genes")
         ),
@@ -387,14 +446,14 @@ rule map_to_genes_by_bowtie2:
         else os.path.join(
             TEMPDIR, f"reversed_reads/{wildcards.sample}_{wildcards.rn}.fq.gz"
         ),
-    threads: 24
+    threads: 2
     shell:
         """
         export LC_ALL=C
         bowtie2 -p {threads} \
             {params.args_bowtie2} --norc -a \
             --no-unal --un {output.un} -x {params.ref_bowtie2} -U {params.fq} 2>{output.report} | \
-            {input.path_samfilter} | \
+            {params.path_samfilter} | \
             samtools view -O BAM -o {output.bam}
         """
 
@@ -406,7 +465,7 @@ rule extract_genes_unmap:
         temp(os.path.join(TEMPDIR, "mapping_rerun/{sample}_{rn}_genes.fq")),
     params:
         ref_fa=REF["genes"]["fa"],
-    threads: 4
+    threads: 1
     shell:
         """
         samtools fastq -@ {threads} --reference {params.ref_fa} {input} > {output}
@@ -435,7 +494,7 @@ rule map_to_genome_by_star:
         report=os.path.join(TEMPDIR, "star_mapping/{sample}_{rn}_Log.final.out"),
         ref_star=REF["genome"]["star"],
         match_prop=config["cutoff"]["min_match_prop"],
-    threads: 24
+    threads: 1
     shell:
         """
         rm -f {params.un}
@@ -486,9 +545,8 @@ rule gap_realign:
             )
         ),
     params:
-        path_realignGap="/pipeline/bin/realignGap",
+        path_realignGap=config['path']["realignGap"],
         ref_fa=lambda wildcards: REF[wildcards.reftype]["fa"],
-    container: "docker://y9ch/bidseq"
     shell:
         """
         {params.path_realignGap} -r {params.ref_fa} -i {input} -o {output}
@@ -509,7 +567,7 @@ rule sort_cal_filter_bam:
         un=temp(os.path.join(TEMPDIR, "mapping_discarded/{sample}_{rn}_{reftype}.cram")),
     params:
         ref_fa=lambda wildcards: REF[wildcards.reftype]["fa"],
-    threads: 8
+    threads: 1
     shell:
         """
         samtools sort -@ {threads} -m 4G {input} | \
@@ -527,7 +585,7 @@ rule combine_mapping_discarded:
         else temp("discarded_reads/{sample}_{rn}_filteredmap.fq.gz"),
     params:
         ref_fa=REF["genome"]["fa"],
-    threads: 4
+    threads: 1
     shell:
         """
         samtools fastq -@ {threads} --reference {params.ref_fa} -0 {output} {input}
@@ -548,16 +606,24 @@ rule combine_runs:
         bai=temp(os.path.join(TEMPDIR, "combined_mapping/{sample}_{reftype}.bam.bai")),
     params:
         ref_fa=lambda wildcards: REF[wildcards.reftype]["fa"],
-    threads: 8
-    run:
-        if len(input) > 1:
-            shell(
-                "samtools merge -@ {threads} --reference {params.ref_fa} --write-index -O BAM -o {output.bam}##idx##{output.bai} {input}"
-            )
-        else:
-            shell(
-                "samtools view -@ {threads} --reference {params.ref_fa} --write-index -O BAM -o {output.bam}##idx##{output.bai} {input}"
-            )
+    threads: 1
+    shell:
+        'input_array=({input})\n'
+        'if [ ${{#input_array[@]}} -gt 1 ]; then\n'
+            "samtools merge "
+                "-@ {threads} "
+                "--reference {params.ref_fa} "
+                "--write-index "
+                "-O BAM "
+                "-o {output.bam}##idx##{output.bai} {input}\n"
+        'else\n'
+            "samtools view "
+                "-@ {threads} "
+                "--reference {params.ref_fa} "
+                "--write-index "
+                "-O BAM "
+                "-o {output.bam}##idx##{output.bai} {input}\n"
+        'fi'
 
 
 rule drop_duplicates:
@@ -570,41 +636,38 @@ rule drop_duplicates:
     params:
         path_umicollapse='/bin/umicollapse.jar',
         TEMPDIR=TEMPDIR,
-    threads: 8
-    container: "docker://y9ch/bidseq"
+        barcode_switch=lambda wildcards: (
+                'true'
+                if SAMPLE2BARCODE[wildcards.sample]["umi5"] + SAMPLE2BARCODE[wildcards.sample]["umi3"] > 0
+                else 'false'
+                ),
+    threads: 1
     shell:
-        """
-        cp {input.bam} {output.bam}
-        touch {output.log}
-        """
-    # TODO fix this
-    # run:
-    #     if (
-    #         SAMPLE2BARCODE[wildcards.sample]["umi5"]
-    #         + SAMPLE2BARCODE[wildcards.sample]["umi3"]
-    #         > 0
-    #     ):
-    #         shell(
-    #             """
-    #             java -server -Xmx46G -Xms24G -Xss100M -Djava.io.tmpdir={params.TEMPDIR} -jar {params.path_umicollapse} bam \
-    #                 -t {threads} --data naive --merge avgqual --two-pass -i {input.bam} -o {output.bam} >{output.log}
-    #             """
-    #         )
-    #     else:
-    #         shell(
-    #             """
-    #             cp {input.bam} {output.bam}
-    #             touch {output.log}
-    #             """
-    #         )
-
+        'if [ {params.barcode_switch} = true ]; then\n'
+            'java -server '
+                '-Xmx46G '
+                '-Xms24G '
+                '-Xss100M '
+                '-Djava.io.tmpdir={params.TEMPDIR} '
+                '-jar {params.path_umicollapse} bam'
+                '-t {threads} '
+                '--data naive '
+                '--merge avgqual '
+                '--two-pass '
+                '-i {input.bam} '
+                '-o {output.bam} '
+                '>{output.log} \n'
+        'else\n'
+            'cp {input.bam} {output.bam}\n'
+            'touch {output.log}\n'
+        'fi'
 
 rule index_dedup_bam:
     input:
         "align_bam/{sample}_{reftype}.bam",
     output:
         "align_bam/{sample}_{reftype}.bam.bai",
-    threads: 4
+    threads: 1
     shell:
         "samtools index -@ {threads} {input}"
 
@@ -614,7 +677,7 @@ rule stat_dedup_bam:
         "align_bam/{sample}_{reftype}.bam",
     output:
         "report_reads/deduping/{sample}_{reftype}_dedup.report",
-    threads: 4
+    threads: 1
     shell:
         "samtools flagstat -@ {threads} -O tsv {input} > {output}"
 
@@ -646,8 +709,7 @@ rule report_reads_stat:
     output:
         "report_reads/readsStats.html",
     params:
-        path_multiqc="/pipeline/micromamba/bin/multiqc",
-    container: "docker://y9ch/bidseq"
+        path_multiqc=config['path']["multiqc"],
     shell:
         "{params.path_multiqc} -f -m readsStats -t yc --no-data-dir -n {output} {input}"
 
@@ -673,26 +735,30 @@ rule merge_treated_bam_by_group:
         bai=temp(
             os.path.join(TEMPDIR, "drop_duplicates_grouped/{group}_{reftype}.bam.bai")
         ),
-    threads: 8
+    threads: 1
     shell:
-        "samtools merge -@ {threads} --write-index -O BAM -o {output.bam}##idx##{output.bai} {input.bam}"
+        "samtools merge "
+            "-@ {threads} "
+            "--write-index "
+            "-O BAM "
+            "-o {output.bam}##idx##{output.bai} {input.bam}"
 
 
 rule perbase_count_pre:
     input:
         bam=os.path.join(TEMPDIR, "drop_duplicates_grouped/{group}_{reftype}.bam"),
         bai=os.path.join(TEMPDIR, "drop_duplicates_grouped/{group}_{reftype}.bam.bai"),
-        path_delfilter=scripts / "deletionFilter",
     output:
         temp(os.path.join(TEMPDIR, "selected_region_by_group/{group}_{reftype}.bed")),
     params:
         min_group_gap=config["cutoff"]["min_group_gap"],
         min_group_depth=config["cutoff"]["min_group_depth"],
         min_group_ratio=config["cutoff"]["min_group_ratio"],
+        path_delfilter=config['path']["delfilter"],
     threads: 1
     shell:
         """
-        {input.path_delfilter} -i {input.bam} -g {params.min_group_gap} -d {params.min_group_depth} -r {params.min_group_ratio} > {output}
+        {params.path_delfilter} -i {input.bam} -g {params.min_group_gap} -d {params.min_group_depth} -r {params.min_group_ratio} > {output}
         """
 
 
@@ -722,7 +788,7 @@ rule prepare_bed_file:
         rev=temp(os.path.join(TEMPDIR, "selected_region/picked_{reftype}_rev.bed")),
     params:
         min_group_num=config["cutoff"]["min_group_num"],
-    threads: 4
+    threads: 1
     shell:
         """
         cat {input.bed} | bedtools slop -i - -g {input.fai} -b 3 | sort -S 4G --parallel={threads} -k1,1 -k2,2n >{output.tmp}
@@ -745,7 +811,6 @@ rule count_base_by_sample:
         bai=lambda wildcards: "align_bam/{sample}_{reftype}.bam.bai"
         if wildcards.sample in SAMPLE2RUN
         else SAMPLE2BAM[wildcards.sample][wildcards.reftype] + ".bai",
-        path_cpup=scripts / "cpup",
     output:
         temp(
             os.path.join(
@@ -753,6 +818,7 @@ rule count_base_by_sample:
             )
         ),
     params:
+        path_cpup=config['path']["cpup"],
         ref=lambda wildcards: REF[wildcards.reftype]["fa"],
         region=lambda wildcards: "-l "
         + os.path.join(
@@ -765,11 +831,11 @@ rule count_base_by_sample:
         flag=lambda wildcards: "--ff 3608"
         if wildcards.orientation == "fwd"
         else "--rf 16 --ff 3592",
-    threads: 2
+    threads: 1
     shell:
         """
         samtools mpileup -aa -B -d 0 {params.flag} -Q 5 --reverse-del {params.region} -f {params.ref} {input.bam} | \
-            {input.path_cpup} -H -S -i | \
+            {params.path_cpup} -H -S -i | \
             sed 's/\\t/\\t{params.strand}\\t/3' > {output}
         """
 
@@ -792,7 +858,7 @@ rule count_bases_combined:
         temp(os.path.join(TEMPDIR, "pileup_bases/{reftype}.tsv")),
     params:
         header="\t".join(["chr", "pos", "ref_base", "strand"] + list(SAMPLE_IDS)),
-    threads: 4
+    threads: 1
     shell:
         """
         echo {params.header:q} > {output}
@@ -829,8 +895,7 @@ rule adjust_sites:
     output:
         "call_sites/{reftype}.tsv.gz",
     params:
-        path_adjustGap="/pipeline/bin/adjustGap",
-    container: "docker://y9ch/bidseq"
+        path_adjustGap=config['path']["adjustGap"],
     shell:
         """
         {params.path_adjustGap} -i {input} -o {output}
@@ -843,7 +908,7 @@ rule pre_filter_sites:
     output:
         temp(os.path.join(TEMPDIR, "prefilter_sites/{reftype}.tsv.gz")),
     params:
-        path_filterGap='/pipeline/bin/filterGap',
+        path_filterGap=config['path']['filterGap'],
         min_group_gap=config["cutoff"]["min_group_gap"],
         min_group_depth=config["cutoff"]["min_group_depth"],
         min_group_ratio=config["cutoff"]["min_group_ratio"],
@@ -858,7 +923,6 @@ rule pre_filter_sites:
                 if "treated" in v
             ]
         ),
-    container: "docker://y9ch/bidseq"
     shell:
         """
         {params.path_filterGap} -i {input} -o {output} {params.columns} -g {params.min_group_gap} -d {params.min_group_depth} -r {params.min_group_ratio} -n {params.min_group_num}
@@ -876,4 +940,4 @@ rule post_filter_sites:
         calibration_curve=CALI,
         ref_fasta=lambda wildcards: REF[wildcards.reftype]["fa"],
     script:
-        scripts / "pickSites.py"
+        "bin/pickSites.py"

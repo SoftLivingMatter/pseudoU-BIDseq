@@ -5,7 +5,8 @@
 # 	--mysnake pseudoU-BIDseq/Snakefile \
 # 	--until join_pairend_reads -j 10
 
+module load anaconda3/2024.6
 conda activate snake
-snakemake --snakefile pseudoU-BIDseq/Snakefile \
+snakemake --snakefile Snakefile \
 	--profile bid_cluster \
-	--configfile data.yaml -nq
+	--configfile for_aya_18S.yaml $@

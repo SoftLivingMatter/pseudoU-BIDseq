@@ -24,34 +24,6 @@ max-jobs-per-second: 1
 max-status-checks-per-second: 10
 local-cores: 10  # maximum local jobs to run
 
-set-threads:
-  - join_pairend_reads=1
-  - run_cutadapt=1
-  - reverse_reads=1
-  - build_bowtie2_index=1
-  - map_to_contamination_by_bowtie2=1
-  - extract_contamination_unmap=1
-  - map_to_genes_by_bowtie2=2
-  - extract_genes_unmap=1
-  - map_to_genome_by_star=1
-  - gap_realign=1
-  - sort_cal_filter_bam=1
-  - combine_mapping_discarded=1
-  - combine_runs=1
-  - drop_duplicates=1
-  - index_dedup_bam=1
-  - stat_dedup_bam=1
-  - report_reads_stat=1
-  - merge_treated_bam_by_group=1
-  - perbase_count_pre=1
-  - generate_faidx=1
-  - prepare_bed_file=1
-  - count_base_by_sample=1
-  - count_bases_combined=1
-  - adjust_sites=1
-  - pre_filter_sites=1
-  - post_filter_sites=1
-
 set-resources:
   - build_bowtie2_index:mem_mb=8000
   - build_bowtie2_index:runtime=63
