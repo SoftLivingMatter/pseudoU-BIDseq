@@ -1,11 +1,43 @@
-### default args ###
+# Directory for all output results and analysis reports
+workdir: "/scratch/gpfs/tcomi/tmp_bid/18S_SuperScript_test_redo"
+       
+tempdir: "/scratch/gpfs/tcomi/tmp_bid/18S_SuperScript_test_redo/tmp"
+
+reference:
+  genes:
+    fa: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-polysome-RC-genome-18S/human_18S.fasta
+  genome:
+    fa: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-polysome-RC-genome-18S/human_18S.fasta
+    star: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-polysome-RC-genome-18S/human_18S
+
+cutoff:
+  min_match_prop: 0
+  min_group_gap: 0
+  min_group_depth: 1
+  min_group_ratio: 0
+  min_group_num: 0
+
+group_filter:
+  combine_group_input: false
+  min_passed_group: 0
+  min_treated_depth: 1
+  min_input_depth: 1
+  min_treated_gap: 0
+  min_treated_ratio: 0
+  min_treated_fraction: 0
+  min_fold_ratio: 0.00001
+  max_p_value: 0
+
+# only call gap sites within selected region
+select_region:
+  - genome
 
 # keep run mapping bam file and reference index files.
 # cache these files, so you do not need to re-run some analysis when you add more sequening reads
-keep_internal: false
+keep_internal: true
 # keep dicarded reads (untrimmed, too-short, unmapped...), for debugging purpose.
 # Most of the time, you do not need these files. Set it as `false` to save storage.
-keep_discarded: false
+keep_discarded: true
 
 # only keep reads that have a p7 adapter in the read1, which is important for inline barcode detection
 # If inline barcode is added, this arg will be true, otherwise it will be false
@@ -20,51 +52,25 @@ greedy_mapping: false
 speedy_mapping: false
 
 # defualt barcode scheme
-barcode: '-NNNNN'
+barcode: ''
 
 # If the library is forward_stranded, true mean the R1 is in the same orientation as RNA
-forward_stranded: true
+forward_stranded: false
 
-### build in args ###
-# if you change build in args, add the whole block rather than some records!!
-
-cutoff:
-  ## processing reads
-  # STAR `outFilterMatchNminOverLread`
-  min_match_prop: 0.8
-  ## calling sites
-  # prefilter sites show >= x gaps in total among all samples in each group
-  min_group_gap: 5
-  # prefilter sites show >= x sequencing coverage in total among all samples in each group
-  min_group_depth: 10
-  # prefilter sites show >= x deletion ratio among all samples in each group
-  min_group_ratio: 0.01
-  # only analysis putative sites that show pass prefilter in >= x groups
-  min_group_num: 1
-
-calibration_curves: /pipeline/calibration_curves.tsv
-
-# only call gap sites within selected region
-select_region:
-  - genes
-  - genome
-
-# All the cutoff in these filter are **greater or equal to**
-group_filter:
-  combine_group_input: true
-  min_passed_group: 1
-  min_treated_depth: 20
-  min_input_depth: 20
-  min_treated_gap: 5
-  min_treated_ratio: 0.02
-  min_treated_fraction: 0.02
-  min_fold_ratio: 2
-  max_p_value: 0.0001
+sample_specification:
+  base_path: /projects/BRANGWYNNE/projects/genomics/primary_data/2024/08_August/20240824-BrangwynneSPNovaPool/BIDseq/fastqs/3163__{sample}.fastq.gz
+  # PlusBS-SSIIIa-read-1
+  sample_regex: "{treated}{group}-read-{read}"
+  treated_regex: "Plus|Minus"
+  treated_name: Plus
 
 adapter:
   # 20nt
   p7: AGATCGGAAGAGCACACGTC
   p5: AGTTCTACAGTCCGACGATC
+
+# default to calibration curve in docker container
+# calibration_curves: calibration_curves.tsv
 
 path:
   fastp: /pipeline/micromamba/bin/fastp
