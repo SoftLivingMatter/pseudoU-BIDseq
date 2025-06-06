@@ -2,6 +2,7 @@ import sys
 from snakemake.utils import min_version
 from collections import defaultdict
 import pandas as pd
+from datetime import datetime
 
 if sys.version_info < (3, 6):
     sys.exit("Python 3.6 or later is required.\n")
@@ -169,9 +170,11 @@ rule all:
         "report_reads/readsStats.html" if len(SAMPLE2RUN) > 0 else [],
         expand("call_sites/{reftype}.tsv.gz", reftype=REFTYPE),
         expand("filter_sites/{reftype}.tsv.gz", reftype=REFTYPE),
+        expand(paths['config'], date=datetime.now().strftime('%Y.%m.%d')),
 
 
 localrules:
+    log_config,
     join_pairend_reads,
     run_cutadapt,
     reverse_reads,
@@ -193,6 +196,17 @@ localrules:
     adjust_sites,
     pre_filter_sites,
     post_filter_sites,
+
+rule log_config:
+    '''
+    Copy config and place in logs folder with the date run
+    '''
+    output:
+        config['config_copy']
+    run:
+        import yaml
+        with open(output[0], 'w') as outfile:
+            yaml.dump(config, outfile, default_flow_style=False)
 
 #### process reads ####
 

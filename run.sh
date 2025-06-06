@@ -7,6 +7,7 @@
 
 module load anaconda3/2024.6
 conda activate snake
-snakemake --snakefile Snakefile \
+
+snakemake Snakefile \
 	--profile bid_cluster \
-	--configfile for_aya_18S.yaml $@
+	--configfile config.yaml $@

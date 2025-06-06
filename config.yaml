@@ -10,6 +10,8 @@ reference:
     fa: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-polysome-RC-genome-18S/human_18S.fasta
     star: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-polysome-RC-genome-18S/human_18S
 
+config_copy: config_{date}.yaml"
+
 cutoff:
   min_match_prop: 0
   min_group_gap: 0
