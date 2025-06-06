@@ -170,7 +170,7 @@ rule all:
         "report_reads/readsStats.html" if len(SAMPLE2RUN) > 0 else [],
         expand("call_sites/{reftype}.tsv.gz", reftype=REFTYPE),
         expand("filter_sites/{reftype}.tsv.gz", reftype=REFTYPE),
-        expand(paths['config'], date=datetime.now().strftime('%Y.%m.%d')),
+        expand(config['config_copy'], date=datetime.now().strftime('%Y.%m.%d')),
 
 
 localrules:
