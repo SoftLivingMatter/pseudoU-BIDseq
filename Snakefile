@@ -12,7 +12,7 @@ min_version("7.0")
 WORKDIR = os.path.relpath(
     config.get("workdir", "workspace"), os.path.dirname(workflow.configfiles[-1])
 )
-TEMPDIR = os.path.relpath(config.get("tempdir", os.path.join(WORKDIR, ".tmp")), WORKDIR)
+TEMPDIR = os.path.relpath(os.path.join(WORKDIR, "tmp"), WORKDIR)
 INTERNALDIR = "internal_files"
 
 container: "docker://y9ch/bidseq"
@@ -33,8 +33,9 @@ CALI = (
 REF = config["reference"]
 for k, v in REF.items():
     for k2, v2 in v.items():
-        v2 = os.path.expanduser(v2)
-        REF[k][k2] = v2 if os.path.isabs(v2) else os.path.relpath(v2, WORKDIR)
+        for k3, v3 in v2.items():
+            v3 = os.path.expanduser(v3)
+            REF[k][k2][k3] = v3 if os.path.isabs(v3) else os.path.relpath(v3, WORKDIR)
 
 
 def parse_barcode(b):
@@ -167,9 +168,9 @@ for s, v2 in config["samples"].items():
 
 rule all:
     input:
-        "report_reads/readsStats.html" if len(SAMPLE2RUN) > 0 else [],
-        expand("call_sites/{reftype}.tsv.gz", reftype=REFTYPE),
-        expand("filter_sites/{reftype}.tsv.gz", reftype=REFTYPE),
+        expand("{genome_name}/report_reads/readsStats.html", genome_name=config['reference'].keys()) if len(SAMPLE2RUN) > 0 else [],
+        expand("{genome_name}/call_sites/{reftype}.tsv.gz", reftype=REFTYPE, genome_name=config['reference'].keys()),
+        expand("{genome_name}/filter_sites/{reftype}.tsv.gz", reftype=REFTYPE, genome_name=config['reference'].keys()),
         expand(config['config_copy'], date=datetime.now().strftime('%Y.%m.%d')),
 
 
@@ -361,13 +362,13 @@ rule reverse_reads:
 
 rule build_bowtie2_index:
     input:
-        fa=lambda wildcards: REF[wildcards.reftype]["fa"],
+        fa=lambda wildcards: REF[wildcards.genome_name][wildcards.reftype]["fa"],
     output:
-        idx=os.path.join(INTERNALDIR, "mapping_index/{reftype}.1.bt2")
+        idx=os.path.join(INTERNALDIR, "{genome_name}/mapping_index/{reftype}.1.bt2")
         if config["keep_internal"]
-        else temp(os.path.join(INTERNALDIR, "mapping_index/{reftype}.1.bt2")),
+        else temp(os.path.join(INTERNALDIR, "{genome_name}/mapping_index/{reftype}.1.bt2")),
     params:
-        ref_bowtie2=os.path.join(INTERNALDIR, "mapping_index/{reftype}"),
+        ref_bowtie2=os.path.join(INTERNALDIR, "{genome_name}/mapping_index/{reftype}"),
     threads: 2
     shell:
         """
@@ -431,18 +432,18 @@ rule map_to_genes_by_bowtie2:
         ]
         if "contamination" in REF
         else os.path.join(TEMPDIR, "reversed_reads/{sample}_{rn}.fq.gz"),
-        idx=lambda wildcards: REF["genes"].get(
-            "bt2", os.path.join(INTERNALDIR, "mapping_index/genes")
+        idx=lambda wildcards: REF[wildcards.genome_name]["genes"].get(
+            "bt2", os.path.join(INTERNALDIR, f"{wildcards.genome_name}/mapping_index/genes")
         )
             + ".1.bt2",
     output:
-        bam=temp(os.path.join(TEMPDIR, "mapping_unsort/{sample}_{rn}_genes.bam")),
-        un=temp(os.path.join(TEMPDIR, "mapping_unsort/{sample}_{rn}_genes.fq")),
-        report="report_reads/mapping/{sample}_{rn}_genes.report",
+        bam=temp(os.path.join(TEMPDIR, "{genome_name}/mapping_unsort/{sample}_{rn}_genes.bam")),
+        un=temp(os.path.join(TEMPDIR, "{genome_name}/mapping_unsort/{sample}_{rn}_genes.fq")),
+        report="{genome_name}/report_reads/mapping/{sample}_{rn}_genes.report",
     params:
         path_samfilter=config['path']["samfilter"],
-        ref_bowtie2=lambda wildcards: REF["genes"].get(
-            "bt2", os.path.join(INTERNALDIR, "mapping_index/genes")
+        ref_bowtie2=lambda wildcards: REF[wildcards.genome_name]["genes"].get(
+            "bt2", os.path.join(INTERNALDIR, f"{wildcards.genome_name}/mapping_index/genes")
         ),
         args_bowtie2="--local --ma 2 --score-min G,10,7 -D 20 -R 3 -L 8 -N 1 -i S,1,0.5 --mp 6,3 --rdg 1,2 --rfg 6,3"
         if config["greedy_mapping"]
@@ -474,11 +475,11 @@ rule map_to_genes_by_bowtie2:
 
 rule extract_genes_unmap:
     input:
-        os.path.join(TEMPDIR, "mapping_discarded/{sample}_{rn}_genes.cram"),
+        os.path.join(TEMPDIR, "{genome_name}/mapping_discarded/{sample}_{rn}_genes.cram"),
     output:
-        temp(os.path.join(TEMPDIR, "mapping_rerun/{sample}_{rn}_genes.fq")),
+        temp(os.path.join(TEMPDIR, "{genome_name}/mapping_rerun/{sample}_{rn}_genes.fq")),
     params:
-        ref_fa=REF["genes"]["fa"],
+        ref_fa=lambda wildcards: REF[wildcards.genome_name]["genes"]["fa"],
     threads: 1
     shell:
         """
@@ -488,25 +489,25 @@ rule extract_genes_unmap:
 
 rule map_to_genome_by_star:
     input:
-        f1=os.path.join(TEMPDIR, "mapping_unsort/{sample}_{rn}_genes.fq"),
-        f2=os.path.join(TEMPDIR, "mapping_rerun/{sample}_{rn}_genes.fq"),
+        f1=os.path.join(TEMPDIR, "{genome_name}/mapping_unsort/{sample}_{rn}_genes.fq"),
+        f2=os.path.join(TEMPDIR, "{genome_name}/mapping_rerun/{sample}_{rn}_genes.fq"),
     output:
-        bam=temp(os.path.join(TEMPDIR, "mapping_unsort/{sample}_{rn}_genome.bam")),
-        un="discarded_reads/{sample}_{rn}_unmapped.fq.gz"
+        bam=temp(os.path.join(TEMPDIR, "{genome_name}/mapping_unsort/{sample}_{rn}_genome.bam")),
+        un="{genome_name}/discarded_reads/{sample}_{rn}_unmapped.fq.gz"
         if config["keep_discarded"]
-        else temp("discarded_reads/{sample}_{rn}_unmapped.fq.gz"),
-        report="report_reads/mapping/{sample}_{rn}_genome.report",
-        log_out=temp(os.path.join(TEMPDIR, "star_mapping/{sample}_{rn}_Log.out")),
-        SJ_out=temp(os.path.join(TEMPDIR, "star_mapping/{sample}_{rn}_SJ.out.tab")),
+        else temp("{genome_name}/discarded_reads/{sample}_{rn}_unmapped.fq.gz"),
+        report="{genome_name}/report_reads/mapping/{sample}_{rn}_genome.report",
+        log_out=temp(os.path.join(TEMPDIR, "{genome_name}/star_mapping/{sample}_{rn}_Log.out")),
+        SJ_out=temp(os.path.join(TEMPDIR, "{genome_name}/star_mapping/{sample}_{rn}_SJ.out.tab")),
         progress_out=temp(
-            os.path.join(TEMPDIR, "star_mapping/{sample}_{rn}_Log.progress.out")
+            os.path.join(TEMPDIR, "{genome_name}/star_mapping/{sample}_{rn}_Log.progress.out")
         ),
-        std_out=temp(os.path.join(TEMPDIR, "star_mapping/{sample}_{rn}_Log.std.out")),
+        std_out=temp(os.path.join(TEMPDIR, "{genome_name}/star_mapping/{sample}_{rn}_Log.std.out")),
     params:
-        output_pre=os.path.join(TEMPDIR, "star_mapping/{sample}_{rn}_"),
-        un=os.path.join(TEMPDIR, "star_mapping/{sample}_{rn}_Unmapped.out.mate1"),
-        report=os.path.join(TEMPDIR, "star_mapping/{sample}_{rn}_Log.final.out"),
-        ref_star=REF["genome"]["star"],
+        output_pre=os.path.join(TEMPDIR, "{genome_name}/star_mapping/{sample}_{rn}_"),
+        un=os.path.join(TEMPDIR, "{genome_name}/star_mapping/{sample}_{rn}_Unmapped.out.mate1"),
+        report=os.path.join(TEMPDIR, "{genome_name}/star_mapping/{sample}_{rn}_Log.final.out"),
+        ref_star=lambda wildcards: REF[wildcards.genome_name]["genome"]["star"],
         match_prop=config["cutoff"]["min_match_prop"],
     threads: 1
     shell:
@@ -551,16 +552,16 @@ rule map_to_genome_by_star:
 
 rule gap_realign:
     input:
-        os.path.join(TEMPDIR, "mapping_unsort/{sample}_{rn}_{reftype}.bam"),
+        os.path.join(TEMPDIR, "{genome_name}/mapping_unsort/{sample}_{rn}_{reftype}.bam"),
     output:
         temp(
             os.path.join(
-                TEMPDIR, "mapping_realigned_unsorted/{sample}_{rn}_{reftype}.cram"
+                TEMPDIR, "{genome_name}/mapping_realigned_unsorted/{sample}_{rn}_{reftype}.cram"
             )
         ),
     params:
         path_realignGap=config['path']["realignGap"],
-        ref_fa=lambda wildcards: REF[wildcards.reftype]["fa"],
+        ref_fa=lambda wildcards: REF[wildcards.genome_name][wildcards.reftype]["fa"],
     shell:
         """
         {params.path_realignGap} -r {params.ref_fa} -i {input} -o {output}
@@ -569,18 +570,18 @@ rule gap_realign:
 
 rule sort_cal_filter_bam:
     input:
-        os.path.join(TEMPDIR, "mapping_realigned_unsorted/{sample}_{rn}_{reftype}.cram"),
+        os.path.join(TEMPDIR, "{genome_name}/mapping_realigned_unsorted/{sample}_{rn}_{reftype}.cram"),
     output:
         cram=os.path.join(
-            INTERNALDIR, "mapping_realigned/{sample}_{rn}_{reftype}.cram"
+            INTERNALDIR, "{genome_name}/mapping_realigned/{sample}_{rn}_{reftype}.cram"
         )
         if config["keep_internal"]
         else temp(
-            os.path.join(INTERNALDIR, "mapping_realigned/{sample}_{rn}_{reftype}.cram")
+            os.path.join(INTERNALDIR, "{genome_name}/mapping_realigned/{sample}_{rn}_{reftype}.cram")
         ),
-        un=temp(os.path.join(TEMPDIR, "mapping_discarded/{sample}_{rn}_{reftype}.cram")),
+        un=temp(os.path.join(TEMPDIR, "{genome_name}/mapping_discarded/{sample}_{rn}_{reftype}.cram")),
     params:
-        ref_fa=lambda wildcards: REF[wildcards.reftype]["fa"],
+        ref_fa=lambda wildcards: REF[wildcards.genome_name][wildcards.reftype]["fa"],
     threads: 1
     shell:
         """
@@ -592,13 +593,13 @@ rule sort_cal_filter_bam:
 
 rule combine_mapping_discarded:
     input:
-        os.path.join(TEMPDIR, "mapping_discarded/{sample}_{rn}_genome.cram"),
+        os.path.join(TEMPDIR, "{genome_name}/mapping_discarded/{sample}_{rn}_genome.cram"),
     output:
-        "discarded_reads/{sample}_{rn}_filteredmap.fq.gz"
+        "{genome_name}/discarded_reads/{sample}_{rn}_filteredmap.fq.gz"
         if config["keep_discarded"]
-        else temp("discarded_reads/{sample}_{rn}_filteredmap.fq.gz"),
+        else temp("{genome_name}/discarded_reads/{sample}_{rn}_filteredmap.fq.gz"),
     params:
-        ref_fa=REF["genome"]["fa"],
+        ref_fa=lambda wildcards: REF[wildcards.genome_name]["genome"]["fa"],
     threads: 1
     shell:
         """
@@ -611,15 +612,15 @@ rule combine_runs:
         lambda wildcards: [
             os.path.join(
                 INTERNALDIR,
-                f"mapping_realigned/{wildcards.sample}_{r}_{wildcards.reftype}.cram",
+                f"{wildcards.genome_name}/mapping_realigned/{wildcards.sample}_{r}_{wildcards.reftype}.cram",
             )
             for r in SAMPLE2RUN[wildcards.sample]
         ],
     output:
-        bam=temp(os.path.join(TEMPDIR, "combined_mapping/{sample}_{reftype}.bam")),
-        bai=temp(os.path.join(TEMPDIR, "combined_mapping/{sample}_{reftype}.bam.bai")),
+        bam=temp(os.path.join(TEMPDIR, "{genome_name}/combined_mapping/{sample}_{reftype}.bam")),
+        bai=temp(os.path.join(TEMPDIR, "{genome_name}/combined_mapping/{sample}_{reftype}.bam.bai")),
     params:
-        ref_fa=lambda wildcards: REF[wildcards.reftype]["fa"],
+        ref_fa=lambda wildcards: REF[wildcards.genome_name][wildcards.reftype]["fa"],
     threads: 1
     shell:
         'input_array=({input})\n'
@@ -642,11 +643,11 @@ rule combine_runs:
 
 rule drop_duplicates:
     input:
-        bam=os.path.join(TEMPDIR, "combined_mapping/{sample}_{reftype}.bam"),
-        bai=os.path.join(TEMPDIR, "combined_mapping/{sample}_{reftype}.bam.bai"),
+        bam=os.path.join(TEMPDIR, "{genome_name}/combined_mapping/{sample}_{reftype}.bam"),
+        bai=os.path.join(TEMPDIR, "{genome_name}/combined_mapping/{sample}_{reftype}.bam.bai"),
     output:
-        bam="align_bam/{sample}_{reftype}.bam",
-        log="report_reads/deduping/{sample}_{reftype}.log",
+        bam="{genome_name}/align_bam/{sample}_{reftype}.bam",
+        log="{genome_name}/report_reads/deduping/{sample}_{reftype}.log",
     params:
         path_umicollapse='/bin/umicollapse.jar',
         TEMPDIR=TEMPDIR,
@@ -678,9 +679,9 @@ rule drop_duplicates:
 
 rule index_dedup_bam:
     input:
-        "align_bam/{sample}_{reftype}.bam",
+        "{genome_name}/align_bam/{sample}_{reftype}.bam",
     output:
-        "align_bam/{sample}_{reftype}.bam.bai",
+        "{genome_name}/align_bam/{sample}_{reftype}.bam.bai",
     threads: 1
     shell:
         "samtools index -@ {threads} {input}"
@@ -688,9 +689,9 @@ rule index_dedup_bam:
 
 rule stat_dedup_bam:
     input:
-        "align_bam/{sample}_{reftype}.bam",
+        "{genome_name}/align_bam/{sample}_{reftype}.bam",
     output:
-        "report_reads/deduping/{sample}_{reftype}_dedup.report",
+        "{genome_name}/report_reads/deduping/{sample}_{reftype}_dedup.report",
     threads: 1
     shell:
         "samtools flagstat -@ {threads} -O tsv {input} > {output}"
@@ -704,24 +705,24 @@ rule report_reads_stat:
             for r in v
         ],
         lambda wildcards: [
-            f"report_reads/mapping/{s}_{r}_{t}.report"
+            f"{wildcards.genome_name}/report_reads/mapping/{s}_{r}_{t}.report"
             for s, v in SAMPLE2RUN.items()
             for r in v
-            for t in REF.keys()
+            for t in REF[wildcards.genome_name].keys()
         ],
         lambda wildcards: [
-            f"report_reads/deduping/{s}_{t}_dedup.report"
+            f"{wildcards.genome_name}/report_reads/deduping/{s}_{t}_dedup.report"
             for s in SAMPLE2RUN
-            for t in REF.keys()
+            for t in REF[wildcards.genome_name].keys()
         ],
         # TODO: add discarded reads
         lambda wildcards: [
-            f"discarded_reads/{s}_{r}_filteredmap.fq.gz"
+            f"{wildcards.genome_name}/discarded_reads/{s}_{r}_filteredmap.fq.gz"
             for s, v in SAMPLE2RUN.items()
             for r in v
         ],
     output:
-        "report_reads/readsStats.html",
+        "{genome_name}/report_reads/readsStats.html",
     params:
         path_multiqc=config['path']["multiqc"],
     shell:
@@ -733,21 +734,21 @@ rule report_reads_stat:
 rule merge_treated_bam_by_group:
     input:
         bam=lambda wildcards: [
-            f"align_bam/{s}_{{reftype}}.bam"
+            f"{wildcards.genome_name}/align_bam/{s}_{{reftype}}.bam"
             if s in SAMPLE2RUN
             else SAMPLE2BAM[s][wildcards.reftype]
             for s in GROUP2SAMPLE[wildcards.group]["treated"]
         ],
         bai=lambda wildcards: [
-            f"align_bam/{s}_{{reftype}}.bam.bai"
+            f"{wildcards.genome_name}/align_bam/{s}_{{reftype}}.bam.bai"
             if s in SAMPLE2RUN
             else SAMPLE2BAM[s][wildcards.reftype] + ".bai"
             for s in GROUP2SAMPLE[wildcards.group]["treated"]
         ],
     output:
-        bam=temp(os.path.join(TEMPDIR, "drop_duplicates_grouped/{group}_{reftype}.bam")),
+        bam=temp(os.path.join(TEMPDIR, "{genome_name}/drop_duplicates_grouped/{group}_{reftype}.bam")),
         bai=temp(
-            os.path.join(TEMPDIR, "drop_duplicates_grouped/{group}_{reftype}.bam.bai")
+            os.path.join(TEMPDIR, "{genome_name}/drop_duplicates_grouped/{group}_{reftype}.bam.bai")
         ),
     threads: 1
     shell:
@@ -760,10 +761,10 @@ rule merge_treated_bam_by_group:
 
 rule perbase_count_pre:
     input:
-        bam=os.path.join(TEMPDIR, "drop_duplicates_grouped/{group}_{reftype}.bam"),
-        bai=os.path.join(TEMPDIR, "drop_duplicates_grouped/{group}_{reftype}.bam.bai"),
+        bam=os.path.join(TEMPDIR, "{genome_name}/drop_duplicates_grouped/{group}_{reftype}.bam"),
+        bai=os.path.join(TEMPDIR, "{genome_name}/drop_duplicates_grouped/{group}_{reftype}.bam.bai"),
     output:
-        temp(os.path.join(TEMPDIR, "selected_region_by_group/{group}_{reftype}.bed")),
+        temp(os.path.join(TEMPDIR, "{genome_name}/selected_region_by_group/{group}_{reftype}.bed")),
     params:
         min_group_gap=config["cutoff"]["min_group_gap"],
         min_group_depth=config["cutoff"]["min_group_depth"],
@@ -778,11 +779,11 @@ rule perbase_count_pre:
 
 rule generate_faidx:
     input:
-        fa=lambda wildcards: REF[wildcards.reftype]["fa"],
+        fa=lambda wildcards: REF[wildcards.genome_name][wildcards.reftype]["fa"],
     output:
-        fai=os.path.join(INTERNALDIR, "fa_index/{reftype}.fa.fai")
+        fai=os.path.join(INTERNALDIR, "{genome_name}/fa_index/{reftype}.fa.fai")
         if config["keep_internal"]
-        else temp(os.path.join(INTERNALDIR, "fa_index/{reftype}.fa.fai")),
+        else temp(os.path.join(INTERNALDIR, "{genome_name}/fa_index/{reftype}.fa.fai")),
     shell:
         """
         samtools faidx {input.fa} --fai-idx {output.fai}
@@ -792,14 +793,14 @@ rule generate_faidx:
 rule prepare_bed_file:
     input:
         bed=expand(
-            os.path.join(TEMPDIR, "selected_region_by_group/{group}_{{reftype}}.bed"),
+            os.path.join(TEMPDIR, "{{genome_name}}/selected_region_by_group/{group}_{{reftype}}.bed"),
             group=[g for g, s in GROUP2SAMPLE.items() if "treated" in s],
         ),
-        fai=os.path.join(INTERNALDIR, "fa_index/{reftype}.fa.fai"),
+        fai=os.path.join(INTERNALDIR, "{genome_name}/fa_index/{reftype}.fa.fai"),
     output:
-        tmp=temp(os.path.join(TEMPDIR, "selected_region/picked_{reftype}_tmp.bed")),
-        fwd=temp(os.path.join(TEMPDIR, "selected_region/picked_{reftype}_fwd.bed")),
-        rev=temp(os.path.join(TEMPDIR, "selected_region/picked_{reftype}_rev.bed")),
+        tmp=temp(os.path.join(TEMPDIR, "{genome_name}/selected_region/picked_{reftype}_tmp.bed")),
+        fwd=temp(os.path.join(TEMPDIR, "{genome_name}/selected_region/picked_{reftype}_fwd.bed")),
+        rev=temp(os.path.join(TEMPDIR, "{genome_name}/selected_region/picked_{reftype}_rev.bed")),
     params:
         min_group_num=config["cutoff"]["min_group_num"],
     threads: 1
@@ -815,29 +816,29 @@ rule count_base_by_sample:
     input:
         bed=lambda wildcards: os.path.join(
             TEMPDIR,
-            f"selected_region/picked_{wildcards.reftype}_{wildcards.orientation}.bed",
+            f"{wildcards.genome_name}/selected_region/picked_{wildcards.reftype}_{wildcards.orientation}.bed",
         )
         if wildcards.reftype in config["select_region"]
         else [],
-        bam=lambda wildcards: "align_bam/{sample}_{reftype}.bam"
+        bam=lambda wildcards: "{genome_name}/align_bam/{sample}_{reftype}.bam"
         if wildcards.sample in SAMPLE2RUN
         else SAMPLE2BAM[wildcards.sample][wildcards.reftype],
-        bai=lambda wildcards: "align_bam/{sample}_{reftype}.bam.bai"
+        bai=lambda wildcards: "{genome_name}/align_bam/{sample}_{reftype}.bam.bai"
         if wildcards.sample in SAMPLE2RUN
         else SAMPLE2BAM[wildcards.sample][wildcards.reftype] + ".bai",
     output:
         temp(
             os.path.join(
-                TEMPDIR, "pileup_bases_by_sample/{sample}_{reftype}_{orientation}.tsv"
+                TEMPDIR, "{genome_name}/pileup_bases_by_sample/{sample}_{reftype}_{orientation}.tsv"
             )
         ),
     params:
         path_cpup=config['path']["cpup"],
-        ref=lambda wildcards: REF[wildcards.reftype]["fa"],
+        ref=lambda wildcards: REF[wildcards.genome_name][wildcards.reftype]["fa"],
         region=lambda wildcards: "-l "
         + os.path.join(
             TEMPDIR,
-            f"selected_region/picked_{wildcards.reftype}_{wildcards.orientation}.bed",
+            f"{wildcards.genome_name}/selected_region/picked_{wildcards.reftype}_{wildcards.orientation}.bed",
         )
         if wildcards.reftype in config["select_region"]
         else "",
@@ -858,18 +859,18 @@ rule count_bases_combined:
     input:
         fwd=expand(
             os.path.join(
-                TEMPDIR, "pileup_bases_by_sample/{sample}_{{reftype}}_fwd.tsv"
+                TEMPDIR, "{{genome_name}}/pileup_bases_by_sample/{sample}_{{reftype}}_fwd.tsv"
             ),
             sample=SAMPLE_IDS,
         ),
         rev=expand(
             os.path.join(
-                TEMPDIR, "pileup_bases_by_sample/{sample}_{{reftype}}_rev.tsv"
+                TEMPDIR, "{{genome_name}}/pileup_bases_by_sample/{sample}_{{reftype}}_rev.tsv"
             ),
             sample=SAMPLE_IDS,
         ),
     output:
-        temp(os.path.join(TEMPDIR, "pileup_bases/{reftype}.tsv")),
+        temp(os.path.join(TEMPDIR, "{genome_name}/pileup_bases/{reftype}.tsv")),
     params:
         header="\t".join(["chr", "pos", "ref_base", "strand"] + list(SAMPLE_IDS)),
     threads: 1
@@ -905,9 +906,9 @@ rule count_bases_combined:
 
 rule adjust_sites:
     input:
-        os.path.join(TEMPDIR, "pileup_bases/{reftype}.tsv"),
+        os.path.join(TEMPDIR, "{genome_name}/pileup_bases/{reftype}.tsv"),
     output:
-        "call_sites/{reftype}.tsv.gz",
+        "{genome_name}/call_sites/{reftype}.tsv.gz",
     params:
         path_adjustGap=config['path']["adjustGap"],
     shell:
@@ -918,9 +919,9 @@ rule adjust_sites:
 
 rule pre_filter_sites:
     input:
-        "call_sites/{reftype}.tsv.gz",
+        "{genome_name}/call_sites/{reftype}.tsv.gz",
     output:
-        temp(os.path.join(TEMPDIR, "prefilter_sites/{reftype}.tsv.gz")),
+        temp(os.path.join(TEMPDIR, "{genome_name}/prefilter_sites/{reftype}.tsv.gz")),
     params:
         path_filterGap=config['path']['filterGap'],
         min_group_gap=config["cutoff"]["min_group_gap"],
@@ -945,13 +946,13 @@ rule pre_filter_sites:
 
 rule post_filter_sites:
     input:
-        os.path.join(TEMPDIR, "prefilter_sites/{reftype}.tsv.gz"),
+        os.path.join(TEMPDIR, "{genome_name}/prefilter_sites/{reftype}.tsv.gz"),
     output:
-        "filter_sites/{reftype}.tsv.gz",
+        "{genome_name}/filter_sites/{reftype}.tsv.gz",
     params:
         group_filter=config.get("group_filter", {}),
         group_meta=dict(GROUP2SAMPLE),
         calibration_curve=CALI,
-        ref_fasta=lambda wildcards: REF[wildcards.reftype]["fa"],
+        ref_fasta=lambda wildcards: REF[wildcards.genome_name][wildcards.reftype]["fa"],
     script:
         "bin/pickSites.py"

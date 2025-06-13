@@ -1,14 +1,28 @@
 # Directory for all output results and analysis reports
-workdir: "/scratch/gpfs/tcomi/tmp_bid/18S_SuperScript_test_redo"
-       
-tempdir: "/scratch/gpfs/tcomi/tmp_bid/18S_SuperScript_test_redo/tmp"
+workdir: "/scratch/gpfs/tcomi/tmp_bid/worm_multi"
+
+sample_specification:
+  base_path: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/worm/3353__{sample}.fastq.gz
+  # 3353__1-W1-1-plus-read-1.fastq.gz
+  sample_regex: "\\d+-{group}-{treated}-read-{read}"
+  treated_regex: "plus|minus"
+  treated_name: plus
 
 reference:
-  genes:
-    fa: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-polysome-RC-genome-18S/human_18S.fasta
-  genome:
-    fa: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-polysome-RC-genome-18S/human_18S.fasta
-    star: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-polysome-RC-genome-18S/human_18S
+  #contamination:
+  #  fa: ./ref/contamination.fa
+  18S:
+    genes:
+      fa: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-worm-RC-genome-18S/worm_18S.fasta
+    genome:
+      fa: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-worm-RC-genome-18S/worm_18S.fasta
+      star: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-worm-RC-genome-18S/worm_18S_rRNA
+  26S:
+    genes:
+      fa: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-worm-RC-genome-18S/worm_26S.fasta
+    genome:
+      fa: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-worm-RC-genome-18S/worm_26S.fasta
+      star: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-worm-RC-genome-18S/worm_26S_rRNA
 
 config_copy: config_{date}.yaml"
 
@@ -33,6 +47,9 @@ group_filter:
 # only call gap sites within selected region
 select_region:
   - genome
+  # - genes
+  
+### default args ###
 
 # keep run mapping bam file and reference index files.
 # cache these files, so you do not need to re-run some analysis when you add more sequening reads
@@ -59,20 +76,10 @@ barcode: ''
 # If the library is forward_stranded, true mean the R1 is in the same orientation as RNA
 forward_stranded: false
 
-sample_specification:
-  base_path: /projects/BRANGWYNNE/projects/genomics/primary_data/2024/08_August/20240824-BrangwynneSPNovaPool/BIDseq/fastqs/3163__{sample}.fastq.gz
-  # PlusBS-SSIIIa-read-1
-  sample_regex: "{treated}{group}-read-{read}"
-  treated_regex: "Plus|Minus"
-  treated_name: Plus
-
 adapter:
   # 20nt
   p7: AGATCGGAAGAGCACACGTC
   p5: AGTTCTACAGTCCGACGATC
-
-# default to calibration curve in docker container
-# calibration_curves: calibration_curves.tsv
 
 path:
   fastp: /pipeline/micromamba/bin/fastp
@@ -93,4 +100,4 @@ path:
   adjustGap: /pipeline/bin/adjustGap
   realignGap: /pipeline/bin/realignGap
   filterGap: /pipeline/bin/filterGap
-  pickSites: /pipeline/bin/pickSites.py
+  pickSites: /pipeline/bin/pickSites.py 
