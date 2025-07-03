@@ -14,17 +14,11 @@ reference:
   18S:
     genes:
       fa: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-worm-RC-genome-18S/worm_18S.fasta
-    genome:
-      fa: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-worm-RC-genome-18S/worm_18S.fasta
-      star: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-worm-RC-genome-18S/worm_18S_rRNA
   26S:
     genes:
       fa: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-worm-RC-genome-18S/worm_26S.fasta
-    genome:
-      fa: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-worm-RC-genome-18S/worm_26S.fasta
-      star: /projects/BRANGWYNNE/projects/genomics/primary_data/2025/03_March/20250324-BrangwynneNova-LJSQ/pseudoU-BIDseq-worm-RC-genome-18S/worm_26S_rRNA
 
-config_copy: config_{date}.yaml"
+config_copy: config_{date}.yaml
 
 cutoff:
   min_match_prop: 0
@@ -46,8 +40,8 @@ group_filter:
 
 # only call gap sites within selected region
 select_region:
-  - genome
-  # - genes
+  - genes
+  # - genome
   
 ### default args ###
 

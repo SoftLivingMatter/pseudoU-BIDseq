@@ -88,7 +88,7 @@ def generate_samples(sample_specification):
     print(f'Found {len(data)} files')
     data = pd.concat(
         (data, data['sample'].str.extract(regex)),
-        axis='columns').dropna()
+        axis='columns').dropna().sort_values(['sample', 'read'])
     print(f'Extracted {len(data)} files')
 
     data['treated'] = data['treated'] == sample_specification['treated_name']
@@ -169,8 +169,10 @@ for s, v2 in config["samples"].items():
 rule all:
     input:
         expand("{genome_name}/report_reads/readsStats.html", genome_name=config['reference'].keys()) if len(SAMPLE2RUN) > 0 else [],
-        expand("{genome_name}/call_sites/{reftype}.tsv.gz", reftype=REFTYPE, genome_name=config['reference'].keys()),
-        expand("{genome_name}/filter_sites/{reftype}.tsv.gz", reftype=REFTYPE, genome_name=config['reference'].keys()),
+        expand("{genome_name}/call_sites/{reftype}.tsv.gz", reftype=config['select_region'],
+               genome_name=config['reference'].keys()),
+        expand("{genome_name}/filter_sites/{reftype}.tsv.gz", reftype=config['select_region'],
+               genome_name=config['reference'].keys()),
         expand(config['config_copy'], date=datetime.now().strftime('%Y.%m.%d')),
 
 
@@ -720,7 +722,7 @@ rule report_reads_stat:
             f"{wildcards.genome_name}/discarded_reads/{s}_{r}_filteredmap.fq.gz"
             for s, v in SAMPLE2RUN.items()
             for r in v
-        ],
+        ] if 'genome' in config['select_region'] else [],
     output:
         "{genome_name}/report_reads/readsStats.html",
     params:
